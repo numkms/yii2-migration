@@ -39,7 +39,7 @@ use function time;
  * Generates migration file based on the existing database table and previous migrations.
  *
  * @author Paweł Bizley Brzozowski
- * @version 3.4.0
+ * @version 4.0.0
  * @license Apache 2.0
  * https://github.com/bizley/yii2-migration
  */
@@ -48,7 +48,13 @@ class MigrationController extends Controller
     /**
      * @var string
      */
-    protected $version = '3.4.0';
+    protected $version = '4.0.0';
+
+    /**
+     * @var Connection|array|string DB connection object, configuration array, or the application component ID of
+     * the DB connection to use when creating migrations.
+     */
+    public $db = 'db';
 
     /**
      * @var string Default command action.
@@ -56,8 +62,32 @@ class MigrationController extends Controller
     public $defaultAction = 'list';
 
     /**
+     * @var array List of database tables that should be skipped for *-all actions.
+     * @since 3.2.0
+     */
+    public $excludeTables = [];
+
+    /**
+     * @var bool Whether to add freshly generated migration to migration history in DB.
+     * @since 2.0
+     */
+    public $fixHistory = false;
+
+    /**
+     * @var bool Whether to use general column schema instead of database specific.
+     * @since 2.0
+     */
+    public $generalSchema = true;
+
+    /**
+     * @var string Name of the table for keeping applied migration information.
+     * The same as in yii\console\controllers\MigrateController::$migrationTable.
+     * @since 2.0
+     */
+    public $migrationTable = '{{%migration}}';
+
+    /**
      * @var string Directory storing the migration classes. This can be either a path alias or a directory.
-     * Alias -p
      */
     public $migrationPath = '@app/migrations';
 
@@ -68,67 +98,15 @@ class MigrationController extends Controller
      * Migration namespace should be resolvable as a path alias if prefixed with @, e.g. if you specify the namespace
      * 'app\migrations', the code Yii::getAlias('@app/migrations') should be able to return the file path to
      * the directory this namespace refers to.
-     * Alias -n
      * @since 1.1
      */
     public $migrationNamespace;
 
     /**
-     * @var string Template file for generating new migrations.
-     * This can be either a path alias (e.g. "@app/migrations/template.php") or a file path.
-     * Alias -F
-     */
-    public $templateFile = '@bizley/migration/views/create_migration.php';
-
-    /**
-     * @var string Template file for generating updating migrations.
-     * This can be either a path alias (e.g. "@app/migrations/template.php") or a file path.
-     * Alias -U
-     */
-    public $templateFileUpdate = '@bizley/migration/views/update_migration.php';
-
-    /**
-     * @var bool|string|int Whether the table names generated should consider the $tablePrefix setting of the DB
-     * connection. For example, if the table name is 'post' the generator will return '{{%post}}'.
-     * Alias -P
-     */
-    public $useTablePrefix = 1;
-
-    /**
-     * @var Connection|array|string DB connection object, configuration array, or the application component ID of
-     * the DB connection to use when creating migrations.
-     */
-    public $db = 'db';
-
-    /**
-     * @var string Name of the table for keeping applied migration information.
-     * The same as in yii\console\controllers\MigrateController::$migrationTable.
-     * Alias -t
+     * @var bool Whether to only display changes instead of generating update migration.
      * @since 2.0
      */
-    public $migrationTable = '{{%migration}}';
-
-    /**
-     * @var bool|string|int Whether to only display changes instead of generating update migration.
-     * Alias -s
-     * @since 2.0
-     */
-    public $showOnly = 0;
-
-    /**
-     * @var bool|string|int Whether to use general column schema instead of database specific.
-     * Alias -g
-     * @since 2.0
-     * Since 3.0.0 this property is 1 by default.
-     */
-    public $generalSchema = 1;
-
-    /**
-     * @var bool|string|int Whether to add generated migration to migration history.
-     * Alias -h
-     * @since 2.0
-     */
-    public $fixHistory = 0;
+    public $showOnly = false;
 
     /**
      * @var array List of migrations from the history table that should be skipped during the update process.
@@ -138,10 +116,17 @@ class MigrationController extends Controller
     public $skipMigrations = [];
 
     /**
+     * @var string|null String rendered in the create migration template for table options.
+     * By default it renders "$tableOptions" to indicate that options should be taken from variable
+     * set in $tableOptionsInit property.
+     * @since 3.0.4
+     */
+    public $tableOptions = '$tableOptions';
+
+    /**
      * @var string|null String rendered in the create migration template to initialize table options.
      * By default it adds variable "$tableOptions" with optional collate configuration for MySQL DBMS to be used with
      * default $tableOptions.
-     * Alias -O
      * @since 3.0.4
      */
     public $tableOptionsInit = '$tableOptions = null;
@@ -150,27 +135,25 @@ class MigrationController extends Controller
         }';
 
     /**
-     * @var string|null String rendered in the create migration template for table options.
-     * By default it renders "$tableOptions" to indicate that options should be taken from variable
-     * set in $tableOptionsInit property.
-     * Alias -o
-     * @since 3.0.4
+     * @var array Template files for generating migrations.
+     * The array must contain 3 keys:
+     * - 'create' - for migrations that create table,
+     * - 'update' - for migrations that alter table,
+     * - 'foreign_keys' - for migrations that create foreign keys, that can be only applied at the end of process.
+     * Each key's value can be either a path alias (e.g. "@app/migrations/template.php") or a file path.
+     * @since 4.0.0
      */
-    public $tableOptions = '$tableOptions';
+    public $templates = [
+        'create' => '@bizley/migration/views/create_migration.php',
+        'update' => '@bizley/migration/views/update_migration.php',
+        'foreign_keys' => '@bizley/migration/views/create_fk_migration.php',
+    ];
 
     /**
-     * @var array List of database tables that should be skipped for *-all actions.
-     * @since 3.2.0
+     * @var bool Whether the table names generated should consider the $tablePrefix setting of the DB connection.
+     * For example, if the table name is 'post' the generator will return '{{%post}}'.
      */
-    public $excludeTables = [];
-
-    /**
-     * @var string Template file for generating new foreign keys migrations.
-     * This can be either a path alias (e.g. "@app/migrations/template.php") or a file path.
-     * Alias -K
-     * @since 3.4.0
-     */
-    public $templateFileForeignKey = '@bizley/migration/views/create_fk_migration.php';
+    public $useTablePrefix = true;
 
     /**
      * {@inheritdoc}
@@ -183,17 +166,15 @@ class MigrationController extends Controller
             'migrationPath',
             'migrationNamespace',
             'generalSchema',
-            'templateFile',
+            'template',
             'useTablePrefix',
             'fixHistory',
             'migrationTable',
             'tableOptionsInit',
             'tableOptions',
-            'templateFileForeignKey',
         ];
         $updateOptions = [
             'showOnly',
-            'templateFileUpdate',
             'skipMigrations'
         ];
 
@@ -240,38 +221,20 @@ class MigrationController extends Controller
      */
     public function optionAliases(): array
     {
-        return array_merge(parent::optionAliases(), [
-            'p' => 'migrationPath',
-            'n' => 'migrationNamespace',
-            't' => 'migrationTable',
-            'g' => 'generalSchema',
-            'F' => 'templateFile',
-            'U' => 'templateFileUpdate',
-            'P' => 'useTablePrefix',
-            'h' => 'fixHistory',
-            's' => 'showOnly',
-            'O' => 'tableOptionsInit',
-            'o' => 'tableOptions',
-            'K' => 'templateFileForeignKey',
-        ]);
-    }
-
-    /**
-     * Makes sure boolean properties are boolean.
-     */
-    public function init(): void
-    {
-        parent::init();
-
-        foreach (['useTablePrefix', 'showOnly', 'generalSchema', 'fixHistory'] as $property) {
-            if ($this->$property !== true) {
-                if ($this->$property === 'true' || $this->$property === 1) {
-                    $this->$property = true;
-                }
-
-                $this->$property = (bool)$this->$property;
-            }
-        }
+        return array_merge(
+            parent::optionAliases(),
+            [
+                'mp' => 'migrationPath',
+                'mn' => 'migrationNamespace',
+                'mt' => 'migrationTable',
+                'gs' => 'generalSchema',
+                'tp' => 'useTablePrefix',
+                'fh' => 'fixHistory',
+                'so' => 'showOnly',
+                'toi' => 'tableOptionsInit',
+                'to' => 'tableOptions',
+            ]
+        );
     }
 
     protected $workingPath;
@@ -306,7 +269,7 @@ class MigrationController extends Controller
         }
 
         $this->db = Instance::ensure($this->db, Connection::class);
-        $this->stdout("Yii 2 Migration Generator Tool v{$this->version}\n\n", Console::FG_CYAN);
+        $this->stdout("Yii 2 Migration Generator Tool v{$this->version}\n\n", Console::FG_YELLOW, Console::BG_CYAN);
 
         return true;
     }
@@ -401,22 +364,22 @@ class MigrationController extends Controller
         $this->stdout("\n > Run\n", Console::FG_GREEN);
 
         $tab = $this->ansiFormat('<table>', Console::FG_YELLOW);
-        $cmd = $this->ansiFormat('migration/create', Console::FG_CYAN);
+        $cmd = $this->ansiFormat("{$this->id}/create", Console::FG_CYAN);
         $this->stdout("   $cmd $tab\n");
 
         $this->stdout("      to generate creating migration for the specific table.\n", Console::FG_GREEN);
 
-        $cmd = $this->ansiFormat('migration/create-all', Console::FG_CYAN);
+        $cmd = $this->ansiFormat("{$this->id}/create-all", Console::FG_CYAN);
         $this->stdout("   $cmd\n");
 
         $this->stdout("      to generate creating migrations for all the tables.\n", Console::FG_GREEN);
 
-        $cmd = $this->ansiFormat('migration/update', Console::FG_CYAN);
+        $cmd = $this->ansiFormat("{$this->id}/update", Console::FG_CYAN);
         $this->stdout("   $cmd $tab\n");
 
         $this->stdout("      to generate updating migration for the specific table.\n", Console::FG_GREEN);
 
-        $cmd = $this->ansiFormat('migration/update-all', Console::FG_CYAN);
+        $cmd = $this->ansiFormat("{$this->id}/update-all", Console::FG_CYAN);
         $this->stdout("   $cmd\n");
 
         $this->stdout("      to generate updating migrations for all the tables.\n", Console::FG_GREEN);
@@ -494,7 +457,7 @@ class MigrationController extends Controller
                 'db' => $this->db,
                 'view' => $this->view,
                 'useTablePrefix' => $this->useTablePrefix,
-                'templateFile' => $this->templateFile,
+                'templateFile' => $this->templates['create'],
                 'tableName' => $name,
                 'className' => $className,
                 'namespace' => $this->migrationNamespace,
@@ -591,7 +554,7 @@ class MigrationController extends Controller
         $tables = $this->removeExcludedTables($this->db->schema->getTableNames());
 
         if (!$tables) {
-            $this->stdout(' > Your database does not contain any tables yet.', Console::FG_YELLOW);
+            $this->stdout(' > Your database does not contain any not excluded tables yet.', Console::FG_YELLOW);
 
             return ExitCode::OK;
         }
@@ -631,8 +594,8 @@ class MigrationController extends Controller
                 'db' => $this->db,
                 'view' => $this->view,
                 'useTablePrefix' => $this->useTablePrefix,
-                'templateFile' => $this->templateFile,
-                'templateFileUpdate' => $this->templateFileUpdate,
+                'templateFile' => $this->templates['create'],
+                'templateFileUpdate' => $this->templates['update'],
                 'tableName' => $name,
                 'className' => $className,
                 'namespace' => $this->migrationNamespace,
@@ -712,7 +675,7 @@ class MigrationController extends Controller
         $tables = $this->removeExcludedTables($this->db->schema->getTableNames());
 
         if (!$tables) {
-            $this->stdout(' > Your database does not contain any tables yet.', Console::FG_YELLOW);
+            $this->stdout(' > Your database does not contain any not excluded tables yet.', Console::FG_YELLOW);
 
             return ExitCode::OK;
         }
