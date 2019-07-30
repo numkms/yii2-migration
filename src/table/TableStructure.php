@@ -4,8 +4,18 @@ declare(strict_types=1);
 
 namespace bizley\migration\table;
 
+use function call_user_func;
+use Closure;
+use function is_string;
 use yii\base\BaseObject;
 use yii\base\InvalidArgumentException;
+use yii\db\cubrid\Schema as CubridSchema;
+use yii\db\mssql\Schema as MssqlSchema;
+use yii\db\mysql\Schema as MysqlSchema;
+use yii\db\oci\Schema as OciSchema;
+use yii\db\pgsql\Schema as PgsqlSchema;
+use yii\db\sqlite\Schema as SqliteSchema;
+use function in_array;
 use function mb_strlen;
 use function sprintf;
 use function strpos;
@@ -70,11 +80,33 @@ class TableStructure extends BaseObject
     /**
      * @var string|null
      * @since 3.0.4
+     * TODO: remove
      */
     public $tableOptionsInit;
 
     /**
-     * @var string|null
+     * @var Closure|string|null
+     * Closure signature must be
+     * function($table): string
+     * where $table is reference to current TableStructure object.
+     * @since 4.0.0
+     */
+    public $prepend;
+
+    /**
+     * @var Closure|string
+     * Closure signature must be
+     * function($table): string
+     * where $table is reference to current TableStructure object.
+     * @since 4.0.0
+     */
+    public $append;
+
+    /**
+     * @var Closure|string|null
+     * Closure signature must be
+     * function($table): string
+     * where $table is reference to current TableStructure object.
      * @since 3.0.4
      */
     public $tableOptions;
@@ -100,22 +132,22 @@ class TableStructure extends BaseObject
     public static function identifySchema(?string $schemaClass): string
     {
         switch ($schemaClass) {
-            case 'yii\db\mssql\Schema':
+            case MssqlSchema::class:
                 return self::SCHEMA_MSSQL;
 
-            case 'yii\db\oci\Schema':
+            case OciSchema::class:
                 return self::SCHEMA_OCI;
 
-            case 'yii\db\pgsql\Schema':
+            case PgsqlSchema::class:
                 return self::SCHEMA_PGSQL;
 
-            case 'yii\db\sqlite\Schema':
+            case SqliteSchema::class:
                 return self::SCHEMA_SQLITE;
 
-            case 'yii\db\cubrid\Schema':
+            case CubridSchema::class:
                 return self::SCHEMA_CUBRID;
 
-            case 'yii\db\mysql\Schema':
+            case MysqlSchema::class:
                 return self::SCHEMA_MYSQL;
 
             default:
@@ -153,11 +185,15 @@ class TableStructure extends BaseObject
 
     /**
      * Renders the migration structure.
+     * @param array $mutedDependencies
      * @return string
      */
-    public function render(): string
+    public function render(array $mutedDependencies = []): string
     {
-        return $this->renderTable() . $this->renderPk() . $this->renderIndexes() . $this->renderForeignKeys() . "\n";
+        return $this->renderTable()
+            . $this->renderPk()
+            . $this->renderIndexes()
+            . $this->renderForeignKeys([], $mutedDependencies) . "\n";
     }
 
     /**
@@ -168,8 +204,17 @@ class TableStructure extends BaseObject
     {
         $output = '';
 
-        if ($this->tableOptionsInit !== null) {
-            $output .= "        {$this->tableOptionsInit}\n\n";
+        $prepend = null;
+        if ($this->prepend !== null) {
+            if (is_string($this->prepend)) {
+                $prepend = $this->prepend;
+            } elseif ($this->prepend instanceof Closure) {
+                $prepend = call_user_func($this->prepend, $this);
+            }
+        }
+
+        if ($prepend !== null) {
+            $output .= $prepend;
         }
 
         $output .= sprintf('        $this->createTable(\'%s\', [', $this->renderName());
@@ -178,10 +223,32 @@ class TableStructure extends BaseObject
             $output .= "\n" . $column->render($this);
         }
 
+        $tableOptions = null;
+        if ($this->tableOptions !== null) {
+            if (is_string($this->tableOptions)) {
+                $tableOptions = $this->tableOptions;
+            } elseif ($this->tableOptions instanceof Closure) {
+                $tableOptions = call_user_func($this->tableOptions, $this);
+            }
+        }
+
         $output .= "\n" . sprintf(
             '        ]%s);',
-            $this->tableOptions !== null ? ", {$this->tableOptions}" : ''
+            $tableOptions !== null ? ", {$tableOptions}" : ''
         ) . "\n";
+
+        $append = null;
+        if ($this->append !== null) {
+            if (is_string($this->append)) {
+                $append = $this->append;
+            } elseif ($this->append instanceof Closure) {
+                $append = call_user_func($this->append, $this);
+            }
+        }
+
+        if ($append !== null) {
+            $output .= $append;
+        }
 
         return $output;
     }
@@ -226,16 +293,26 @@ class TableStructure extends BaseObject
 
     /**
      * Renders the foreign keys.
+     * @param array $onlyForTables
+     * @param array $exceptForTables
      * @return string
      */
-    public function renderForeignKeys(): string
+    public function renderForeignKeys(array $onlyForTables = [], array $exceptForTables = []): string
     {
         $output = '';
 
-        if ($this->foreignKeys) {
-            foreach ($this->foreignKeys as $foreignKey) {
-                $output .= "\n" . $foreignKey->render($this);
+        if (!$this->foreignKeys) {
+            return $output;
+        }
+
+        foreach ($this->foreignKeys as $foreignKey) {
+            if ($onlyForTables && !in_array($foreignKey->refTable, $onlyForTables, true)) {
+                continue;
             }
+            if ($exceptForTables && in_array($foreignKey->refTable, $exceptForTables, true)) {
+                continue;
+            }
+            $output .= "\n" . $foreignKey->render($this);
         }
 
         return $output;

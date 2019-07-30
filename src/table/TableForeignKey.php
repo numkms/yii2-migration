@@ -51,6 +51,12 @@ class TableForeignKey extends BaseObject
     public $onUpdate;
 
     /**
+     * @var bool Whether this key should be rendered after the parent and reference tables.
+     * @since 4.0.0
+     */
+    public $suppressed = false;
+
+    /**
      * Renders key name.
      * @param TableStructure $table
      * @return string
